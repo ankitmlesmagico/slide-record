@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Google Slides Recorder</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Google Slides Recorder</h1>
+        <p>Automatically record Google Slides presentations with custom timing</p>
+        
+        <form id="recordForm">
+            <div class="form-group">
+                <label for="slideUrl">Google Slides URL:</label>
+                <input type="url" id="slideUrl" placeholder="https://docs.google.com/presentation/d/..." required>
+                <small>Paste the Google Slides link (edit or present mode)</small>
+            </div>
+            
+            <div class="form-group">
+                <label for="timings">Slide Timings (seconds):</label>
+                <input type="text" id="timings" placeholder="5,8,12,20" required>
+                <small>Comma-separated seconds when to advance slides (e.g., 5,8,12,20)</small>
+            </div>
+            
+            <button type="submit" id="startBtn">Start Recording</button>
+        </form>
+        
+        <div id="status" class="status hidden"></div>
+        
+        <div id="result" class="result hidden">
+            <h3>Recording Complete!</h3>
+            <a id="downloadLink" href="#" download>Download Video</a>
+        </div>
+    </div>
+    
+    <script src="script.js"></script>
+</body>
+</html>
