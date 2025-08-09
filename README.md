@@ -12,14 +12,23 @@ Automatically record Google Slides presentations with custom timing using Puppet
 
 ## Prerequisites
 
-### System Requirements (Linux/Kali)
+### System Requirements
 
 1. **Node.js** (v16 or higher)
 2. **ffmpeg** - For screen recording
-3. **xwininfo** - For window detection (usually pre-installed)
 
 ### Install Dependencies
 
+#### macOS
+```bash
+# Install ffmpeg using Homebrew
+brew install ffmpeg
+
+# Install Node.js dependencies
+npm install
+```
+
+#### Linux/Kali
 ```bash
 # Install ffmpeg
 sudo apt update
@@ -73,10 +82,11 @@ npm install
 - Simulates keyboard presses (Right Arrow) for slide advancement
 
 ### Screen Recording
-- Uses ffmpeg with x11grab for Linux screen capture
-- Detects Chrome window position/size automatically
+- **macOS**: Uses ffmpeg with avfoundation for screen capture
+- **Linux**: Uses ffmpeg with x11grab for screen capture
+- Detects screen resolution automatically
 - Records at 30 FPS with H.264 encoding
-- No cursor or background applications captured
+- Full screen recording (macOS) or window-specific (Linux)
 
 ### File Structure
 ```
@@ -117,10 +127,12 @@ For detailed logging, check the server console output when recording starts.
 
 ## Limitations
 
-- Linux only (uses x11grab)
+- **macOS**: Records entire screen (may include other applications)
+- **Linux**: Window-specific recording (cleaner output)
 - Requires GUI environment (not headless server)
 - Google Slides must be publicly accessible or user must be logged in
 - Recording quality depends on system performance
+- **macOS**: May require screen recording permissions in System Preferences
 
 ## License
 
