@@ -55,6 +55,11 @@ async function recordSlideshow(slideUrl, timings, outputPath) {
         "--disable-features=VizDisplayCompositor",
         "--no-sandbox",
         "--disable-setuid-sandbox",
+        "--disable-infobars",
+        "--disable-extensions",
+        "--disable-plugins",
+        "--disable-popup-blocking",
+        "--kiosk", // Force true fullscreen mode
       ],
     };
 
@@ -83,8 +88,21 @@ async function recordSlideshow(slideUrl, timings, outputPath) {
     // Wait for presentation to load
     await page.waitForTimeout(3000);
 
+    // On macOS, maximize the Chrome window using AppleScript
+    if (os.platform() === "darwin") {
+      await maximizeChromeWindow();
+      await page.waitForTimeout(1000);
+    }
+
+    // Ensure we're in presentation mode by pressing F5 (start slideshow)
+    await page.keyboard.press("F5");
+    await page.waitForTimeout(2000);
+
+    // Hide cursor by moving it to corner
+    await page.mouse.move(0, 0);
+
     // Get window info for recording
-    const windowInfo = await getWindowInfo();
+    const windowInfo = await getWindowInfo(browser);
 
     // Start recording
     ffmpegProcess = await startRecording(windowInfo, outputPath);
@@ -115,11 +133,43 @@ async function recordSlideshow(slideUrl, timings, outputPath) {
     }
 
     if (ffmpegProcess) {
-      ffmpegProcess.kill("SIGTERM");
+      console.log("Stopping FFmpeg recording...");
+
+      // Send 'q' to ffmpeg for graceful shutdown
+      try {
+        ffmpegProcess.stdin.write("q");
+        ffmpegProcess.stdin.end();
+      } catch (error) {
+        console.log("Could not send 'q' to ffmpeg, using SIGTERM");
+        ffmpegProcess.kill("SIGTERM");
+      }
+
+      // Wait for ffmpeg to finish processing
       await new Promise((resolve) => {
-        ffmpegProcess.on("close", resolve);
-        setTimeout(resolve, 5000); // Force resolve after 5s
+        const timeout = setTimeout(() => {
+          console.log("Force killing FFmpeg after timeout");
+          ffmpegProcess.kill("SIGKILL");
+          resolve();
+        }, 10000); // 10 second timeout
+
+        ffmpegProcess.on("close", (code) => {
+          clearTimeout(timeout);
+          console.log(`FFmpeg closed with code: ${code}`);
+          resolve();
+        });
       });
+
+      // Check if file was created and has content
+      try {
+        const stats = fs.statSync(outputPath);
+        console.log(`Recording file size: ${stats.size} bytes`);
+        if (stats.size === 0) {
+          throw new Error("Recording file is empty (0 bytes)");
+        }
+      } catch (error) {
+        console.error("Recording file check failed:", error);
+        throw error;
+      }
     }
   }
 }
@@ -172,11 +222,99 @@ async function getScreenResolution() {
   });
 }
 
-function getWindowInfo() {
-  return new Promise(async (resolve) => {
-    const screenRes = await getScreenResolution();
-    console.log("Screen resolution:", screenRes);
-    resolve({ x: 0, y: 0, width: screenRes.width, height: screenRes.height });
+async function getWindowInfo(browser) {
+  const screenRes = await getScreenResolution();
+  console.log("Screen resolution:", screenRes);
+
+  if (os.platform() === "darwin") {
+    // Try to get Chrome window bounds using AppleScript
+    try {
+      const windowInfo = await getChromeWindowBounds();
+      if (windowInfo) {
+        console.log("Chrome window bounds:", windowInfo);
+        return windowInfo;
+      }
+    } catch (error) {
+      console.log("Could not get Chrome window bounds:", error.message);
+    }
+
+    // Fallback to full screen
+    return {
+      x: 0,
+      y: 0,
+      width: screenRes.width,
+      height: screenRes.height,
+    };
+  } else {
+    // Linux: Use screen resolution
+    return { x: 0, y: 0, width: screenRes.width, height: screenRes.height };
+  }
+}
+
+async function getChromeWindowBounds() {
+  return new Promise((resolve, reject) => {
+    const script = `
+      tell application "Google Chrome"
+        if (count of windows) > 0 then
+          set chromeWindow to window 1
+          set windowBounds to bounds of chromeWindow
+          set x to item 1 of windowBounds
+          set y to item 2 of windowBounds
+          set width to (item 3 of windowBounds) - x
+          set height to (item 4 of windowBounds) - y
+          return x & "," & y & "," & width & "," & height
+        else
+          return "no_window"
+        end if
+      end tell
+    `;
+
+    const osascript = spawn("osascript", ["-e", script]);
+    let output = "";
+
+    osascript.stdout.on("data", (data) => {
+      output += data.toString().trim();
+    });
+
+    osascript.on("close", (code) => {
+      if (code === 0 && output && output !== "no_window") {
+        const [x, y, width, height] = output.split(",").map(Number);
+        resolve({ x, y, width, height });
+      } else {
+        reject(new Error("Could not get window bounds"));
+      }
+    });
+
+    osascript.on("error", reject);
+  });
+}
+
+async function maximizeChromeWindow() {
+  return new Promise((resolve, reject) => {
+    const script = `
+      tell application "Google Chrome"
+        if (count of windows) > 0 then
+          set chromeWindow to window 1
+          tell chromeWindow
+            set bounds to {0, 0, 1440, 900}
+          end tell
+          return "maximized"
+        else
+          return "no_window"
+        end if
+      end tell
+    `;
+
+    const osascript = spawn("osascript", ["-e", script]);
+
+    osascript.on("close", (code) => {
+      resolve();
+    });
+
+    osascript.on("error", (error) => {
+      console.log("Could not maximize window:", error.message);
+      resolve(); // Don't fail the whole process
+    });
   });
 }
 
@@ -189,21 +327,37 @@ async function startRecording(windowInfo, outputPath) {
       ffmpegArgs = [
         "-f",
         "avfoundation",
-        "-r",
+        "-framerate",
         "30",
         "-i",
-        "1:none", // Capture display 1, no audio
+        "1", // Capture screen device 1 (from list_devices output)
         "-c:v",
         "libx264",
         "-preset",
-        "fast",
+        "ultrafast", // Faster encoding for real-time
         "-crf",
-        "23",
+        "18", // Better quality
         "-pix_fmt",
-        "yuv420p",
-        "-y",
-        outputPath,
+        "yuv420p", // This will trigger automatic conversion
       ];
+
+      // Add cropping if we have specific window bounds and they're reasonable
+      if (
+        windowInfo.x > 0 ||
+        windowInfo.y > 0 ||
+        (windowInfo.width < 1920 && windowInfo.width > 100) ||
+        (windowInfo.height < 1080 && windowInfo.height > 100)
+      ) {
+        console.log(
+          `Applying crop: ${windowInfo.width}x${windowInfo.height} at ${windowInfo.x},${windowInfo.y}`
+        );
+        ffmpegArgs.push(
+          "-filter:v",
+          `crop=${windowInfo.width}:${windowInfo.height}:${windowInfo.x}:${windowInfo.y}`
+        );
+      }
+
+      ffmpegArgs.push("-y", outputPath);
     } else {
       // Linux: Use x11grab
       ffmpegArgs = [
@@ -226,31 +380,150 @@ async function startRecording(windowInfo, outputPath) {
       ];
     }
 
-    console.log("Starting ffmpeg with args:", ffmpegArgs);
+    console.log("Starting ffmpeg with args:", ffmpegArgs.join(" "));
     const ffmpeg = spawn("ffmpeg", ffmpegArgs);
+
+    let hasStarted = false;
+    let errorOutput = "";
+
+    ffmpeg.stdout.on("data", (data) => {
+      console.log("FFmpeg stdout:", data.toString());
+    });
 
     ffmpeg.stderr.on("data", (data) => {
       const output = data.toString();
-      console.log("FFmpeg:", output);
+      console.log("FFmpeg stderr:", output);
+      errorOutput += output;
 
       // Check if recording has started successfully
-      if (output.includes("frame=") || output.includes("fps=")) {
-        resolve(ffmpeg);
+      if (
+        output.includes("frame=") ||
+        output.includes("fps=") ||
+        output.includes("time=")
+      ) {
+        if (!hasStarted) {
+          hasStarted = true;
+          console.log("✅ FFmpeg recording started successfully");
+          resolve(ffmpeg);
+        }
+      }
+
+      // Check for errors
+      if (
+        output.includes("Permission denied") ||
+        output.includes("Operation not permitted")
+      ) {
+        reject(
+          new Error(
+            "Screen recording permission denied. Please grant screen recording permission in System Preferences > Security & Privacy > Privacy > Screen Recording"
+          )
+        );
+      }
+
+      if (
+        output.includes("No such file or directory") ||
+        output.includes("Invalid data found")
+      ) {
+        reject(new Error("FFmpeg input device error: " + output));
       }
     });
 
     ffmpeg.on("error", (error) => {
-      console.error("FFmpeg error:", error);
+      console.error("FFmpeg spawn error:", error);
       reject(error);
     });
 
-    // Resolve after 3 seconds if no frame output detected (fallback)
+    ffmpeg.on("close", (code) => {
+      console.log(`FFmpeg process closed with code ${code}`);
+      if (code !== 0 && !hasStarted) {
+        reject(
+          new Error(
+            `FFmpeg failed to start (exit code ${code}): ${errorOutput}`
+          )
+        );
+      }
+    });
+
+    // Resolve after 5 seconds if no frame output detected (fallback)
     setTimeout(() => {
-      resolve(ffmpeg);
-    }, 3000);
+      if (!hasStarted) {
+        console.log("⚠️  FFmpeg didn't report frames, but proceeding anyway");
+        resolve(ffmpeg);
+      }
+    }, 5000);
   });
 }
 
+// Test endpoint to check screen recording setup
+app.get("/test-recording", async (req, res) => {
+  try {
+    console.log("Testing screen recording setup...");
+
+    // Test ffmpeg with a short 2-second recording
+    const testPath = "recordings/test-recording.mp4";
+    const testArgs = [
+      "-f",
+      "avfoundation",
+      "-framerate",
+      "30",
+      "-t",
+      "2", // Record for 2 seconds
+      "-i",
+      "1",
+      "-c:v",
+      "libx264",
+      "-preset",
+      "ultrafast",
+      "-pix_fmt",
+      "yuv420p",
+      "-y",
+      testPath,
+    ];
+
+    console.log("Running test recording:", testArgs.join(" "));
+
+    const testProcess = spawn("ffmpeg", testArgs);
+    let output = "";
+
+    testProcess.stderr.on("data", (data) => {
+      output += data.toString();
+    });
+
+    await new Promise((resolve, reject) => {
+      testProcess.on("close", (code) => {
+        if (code === 0) {
+          // Check file size
+          try {
+            const stats = fs.statSync(testPath);
+            console.log(`Test recording created: ${stats.size} bytes`);
+            fs.unlinkSync(testPath); // Clean up test file
+            resolve();
+          } catch (error) {
+            reject(new Error("Test recording file not created"));
+          }
+        } else {
+          reject(new Error(`Test recording failed (code ${code}): ${output}`));
+        }
+      });
+
+      setTimeout(() => reject(new Error("Test recording timeout")), 15000);
+    });
+
+    res.json({ success: true, message: "Screen recording test passed!" });
+  } catch (error) {
+    console.error("Screen recording test failed:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      suggestion:
+        "Please check screen recording permissions in System Preferences > Security & Privacy > Privacy > Screen Recording",
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server running at http://localhost:${PORT}`);
+  console.log(
+    `Test screen recording at: http://localhost:${PORT}/test-recording`
+  );
 });
