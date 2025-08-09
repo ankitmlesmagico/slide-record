@@ -54,7 +54,11 @@ async function recordSlideshow(slideUrl, timings, outputPath) {
                 '--disable-web-security',
                 '--disable-features=VizDisplayCompositor',
                 '--no-sandbox',
-                '--disable-setuid-sandbox'
+                '--disable-setuid-sandbox',
+                '--disable-infobars',
+                '--disable-extensions',
+                '--no-first-run',
+                '--disable-default-apps'
             ]
         });
 
@@ -99,17 +103,20 @@ async function recordSlideshow(slideUrl, timings, outputPath) {
         await page.waitForTimeout(5000);
         
     } finally {
-        // Cleanup
-        if (browser) {
-            await browser.close();
-        }
-        
+        // Stop recording first
         if (ffmpegProcess) {
+            console.log('Stopping recording...');
             ffmpegProcess.kill('SIGTERM');
             await new Promise(resolve => {
                 ffmpegProcess.on('close', resolve);
-                setTimeout(resolve, 5000); // Force resolve after 5s
+                setTimeout(resolve, 3000);
             });
+        }
+        
+        // Then close browser
+        if (browser) {
+            console.log('Closing browser...');
+            await browser.close();
         }
     }
 }
@@ -140,9 +147,48 @@ async function getScreenResolution() {
 
 function getWindowInfo() {
     return new Promise(async (resolve) => {
-        const screenRes = await getScreenResolution();
-        console.log('Screen resolution:', screenRes);
-        resolve({ x: 0, y: 0, width: screenRes.width, height: screenRes.height });
+        console.log('Waiting for Chrome window...');
+        await new Promise(r => setTimeout(r, 2000)); // Wait for Chrome to open
+        
+        const xwininfo = spawn('xwininfo', ['-name', 'Google Chrome']);
+        let output = '';
+        
+        xwininfo.stdout.on('data', (data) => {
+            output += data.toString();
+        });
+        
+        xwininfo.on('close', async (code) => {
+            if (code === 0) {
+                const lines = output.split('\n');
+                const info = {};
+                
+                lines.forEach(line => {
+                    if (line.includes('Absolute upper-left X:')) {
+                        info.x = parseInt(line.split(':')[1].trim());
+                    }
+                    if (line.includes('Absolute upper-left Y:')) {
+                        info.y = parseInt(line.split(':')[1].trim());
+                    }
+                    if (line.includes('Width:')) {
+                        info.width = parseInt(line.split(':')[1].trim());
+                    }
+                    if (line.includes('Height:')) {
+                        info.height = parseInt(line.split(':')[1].trim());
+                    }
+                });
+                
+                console.log('Chrome window info:', info);
+                resolve(info.width ? info : { x: 0, y: 0, width: 1440, height: 810 });
+            } else {
+                const screenRes = await getScreenResolution();
+                resolve({ x: 0, y: 0, width: screenRes.width, height: screenRes.height });
+            }
+        });
+        
+        xwininfo.on('error', async () => {
+            const screenRes = await getScreenResolution();
+            resolve({ x: 0, y: 0, width: screenRes.width, height: screenRes.height });
+        });
     });
 }
 
