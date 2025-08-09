@@ -58,12 +58,21 @@ async function recordSlideshow(slideUrl, timings, outputPath) {
                 '--disable-infobars',
                 '--disable-extensions',
                 '--no-first-run',
-                '--disable-default-apps'
+                '--disable-default-apps',
+                '--exclude-switches=enable-automation',
+                '--disable-blink-features=AutomationControlled'
             ]
         });
 
         const page = await browser.newPage();
         await page.setViewport({ width: 1440, height: 810 });
+        
+        // Remove automation detection
+        await page.evaluateOnNewDocument(() => {
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined,
+            });
+        });
         
         // Convert regular slides URL to presentation mode
         const presentUrl = slideUrl.includes('/present') 
@@ -75,6 +84,15 @@ async function recordSlideshow(slideUrl, timings, outputPath) {
         
         // Wait for presentation to load
         await page.waitForTimeout(3000);
+        
+        // Hide automation banner with CSS
+        await page.addStyleTag({
+            content: `
+                div[jsname="r4nke"] { display: none !important; }
+                .VfPpkd-Bz112c-LgbsSe[jsname="r4nke"] { display: none !important; }
+                [data-value="Chrome is being controlled by automated test software"] { display: none !important; }
+            `
+        });
         
         // Get window info for recording
         const windowInfo = await getWindowInfo();
