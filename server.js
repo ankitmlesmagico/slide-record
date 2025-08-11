@@ -45,83 +45,68 @@ async function recordSlideshow(slideUrl, timings, outputPath) {
     let ffmpegProcess;
     
     try {
-        // Launch browser
-        browser = await puppeteer.launch({
-            headless: false,
-            executablePath: '/usr/bin/google-chrome',
-            args: [
-                '--start-fullscreen',
-                '--disable-web-security',
-                '--disable-features=VizDisplayCompositor',
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-infobars',
-                '--disable-extensions',
-                '--no-first-run',
-                '--disable-default-apps',
-                '--exclude-switches=enable-automation',
-                '--disable-blink-features=AutomationControlled'
-            ]
-        });
-
-        const page = await browser.newPage();
-        await page.setViewport({ width: 1440, height: 810 });
-        
-        // Remove automation detection
-        await page.evaluateOnNewDocument(() => {
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined,
-            });
-        });
-        
-        // Convert regular slides URL to presentation mode
+        // Convert slides URL to presentation mode
         const presentUrl = slideUrl.includes('/present') 
             ? slideUrl 
             : slideUrl.replace('/edit', '/present').replace('#', '/present#');
-        
+
+        // Launch Chrome with no watermark
+        browser = await puppeteer.launch({
+            headless: false,
+            executablePath: '/usr/bin/google-chrome',
+            userDataDir: path.join(__dirname, 'chrome-profile'),
+            ignoreDefaultArgs: [
+                '--enable-automation',
+                '--enable-blink-features=AutomationControlled'
+            ],
+            args: [
+                `--app=${presentUrl}`, // open directly into presentation
+                '--start-fullscreen',
+                '--disable-infobars',
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--no-first-run',
+                '--no-default-browser-check',
+                '--disable-extensions',
+                '--test-type'
+            ]
+        });
+
+        const pages = await browser.pages();
+        const page = pages[0];
+        await page.setViewport({ width: 1440, height: 810 });
+
+        // Remove navigator.webdriver property
+        await page.evaluateOnNewDocument(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        });
+
         console.log('Opening presentation:', presentUrl);
         await page.goto(presentUrl, { waitUntil: 'networkidle2' });
-        
+
         // Wait for presentation to load
         await page.waitForTimeout(3000);
-        
-        // Hide automation banner with CSS
-        await page.addStyleTag({
-            content: `
-                div[jsname="r4nke"] { display: none !important; }
-                .VfPpkd-Bz112c-LgbsSe[jsname="r4nke"] { display: none !important; }
-                [data-value="Chrome is being controlled by automated test software"] { display: none !important; }
-            `
-        });
-        
+
         // Get window info for recording
         const windowInfo = await getWindowInfo();
-        
+
         // Start recording
         ffmpegProcess = startRecording(windowInfo, outputPath);
-        
-        // Wait a moment for recording to start
         await page.waitForTimeout(2000);
-        
-        // Execute slide transitions based on timings
+
+        // Slide transitions
         let currentTime = 0;
         for (let i = 0; i < timings.length; i++) {
             const waitTime = (timings[i] - currentTime) * 1000;
-            if (waitTime > 0) {
-                await page.waitForTimeout(waitTime);
-            }
-            
-            // Press right arrow to advance slide
+            if (waitTime > 0) await page.waitForTimeout(waitTime);
             await page.keyboard.press('ArrowRight');
             console.log(`Advanced to slide ${i + 2} at ${timings[i]}s`);
             currentTime = timings[i];
         }
-        
-        // Wait additional 5 seconds after last slide
+
         await page.waitForTimeout(5000);
         
     } finally {
-        // Stop recording first
         if (ffmpegProcess) {
             console.log('Stopping recording...');
             ffmpegProcess.kill('SIGTERM');
@@ -131,7 +116,6 @@ async function recordSlideshow(slideUrl, timings, outputPath) {
             });
         }
         
-        // Then close browser
         if (browser) {
             console.log('Closing browser...');
             await browser.close();
@@ -166,7 +150,7 @@ async function getScreenResolution() {
 function getWindowInfo() {
     return new Promise(async (resolve) => {
         console.log('Waiting for Chrome window...');
-        await new Promise(r => setTimeout(r, 2000)); // Wait for Chrome to open
+        await new Promise(r => setTimeout(r, 2000));
         
         const xwininfo = spawn('xwininfo', ['-name', 'Google Chrome']);
         let output = '';
@@ -179,22 +163,12 @@ function getWindowInfo() {
             if (code === 0) {
                 const lines = output.split('\n');
                 const info = {};
-                
                 lines.forEach(line => {
-                    if (line.includes('Absolute upper-left X:')) {
-                        info.x = parseInt(line.split(':')[1].trim());
-                    }
-                    if (line.includes('Absolute upper-left Y:')) {
-                        info.y = parseInt(line.split(':')[1].trim());
-                    }
-                    if (line.includes('Width:')) {
-                        info.width = parseInt(line.split(':')[1].trim());
-                    }
-                    if (line.includes('Height:')) {
-                        info.height = parseInt(line.split(':')[1].trim());
-                    }
+                    if (line.includes('Absolute upper-left X:')) info.x = parseInt(line.split(':')[1].trim());
+                    if (line.includes('Absolute upper-left Y:')) info.y = parseInt(line.split(':')[1].trim());
+                    if (line.includes('Width:')) info.width = parseInt(line.split(':')[1].trim());
+                    if (line.includes('Height:')) info.height = parseInt(line.split(':')[1].trim());
                 });
-                
                 console.log('Chrome window info:', info);
                 resolve(info.width ? info : { x: 0, y: 0, width: 1440, height: 810 });
             } else {
