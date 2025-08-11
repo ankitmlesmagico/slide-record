@@ -94,6 +94,10 @@ async function recordSlideshow(slideUrl, timings, outputPath) {
                 ...process.env,
                 DISPLAY: DISPLAY 
             },
+            ignoreDefaultArgs: [
+                            '--enable-automation',
+                            '--enable-blink-features=AutomationControlled'
+                        ],
             args: [
                 '--start-fullscreen',
                 '--enable-gpu',
