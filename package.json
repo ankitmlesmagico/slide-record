@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "start:api": "node api-server.js",
     "start:virtual": "node server-virtual.js",
     "dev": "nodemon server.js",
     "dev:virtual": "nodemon server-virtual.js"
