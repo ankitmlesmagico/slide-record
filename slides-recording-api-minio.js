@@ -67,7 +67,6 @@ if (!fs.existsSync(TEMP_DIR)) {
 // Global process tracking
 let xvfbProcess = null;
 let wmProcess = null;
-let activeRecordings = new Map();
 
 // Utility functions
 const log = (level, message, recordingId = null) => {
@@ -140,53 +139,7 @@ const uploadToMinIO = async (filePath, objectName, recordingId) => {
     }
 };
 
-const deleteFromMinIO = async (objectName) => {
-    try {
-        await minioClient.removeObject(MINIO_BUCKET, objectName);
-        log('SUCCESS', `Deleted from MinIO: ${objectName}`);
-        return true;
-    } catch (error) {
-        log('ERROR', `MinIO delete failed: ${error.message}`);
-        return false;
-    }
-};
 
-const listMinIORecordings = async () => {
-    try {
-        const recordings = [];
-        const stream = minioClient.listObjects(MINIO_BUCKET, '', true);
-        
-        return new Promise((resolve, reject) => {
-            stream.on('data', (obj) => {
-                if (obj.name.endsWith('.mp4')) {
-                    const protocol = MINIO_CONFIG.useSSL ? 'https' : 'http';
-                    const port = MINIO_CONFIG.port === (MINIO_CONFIG.useSSL ? 443 : 80) ? '' : `:${MINIO_CONFIG.port}`;
-                    const publicUrl = `${protocol}://${MINIO_CONFIG.endPoint}${port}/${MINIO_BUCKET}/${obj.name}`;
-                    
-                    recordings.push({
-                        recordingId: obj.name.replace('slideshow_', '').replace('.mp4', ''),
-                        filename: obj.name,
-                        fileSize: obj.size,
-                        fileSizeMB: Math.round(obj.size / 1024 / 1024 * 100) / 100,
-                        lastModified: obj.lastModified,
-                        downloadUrl: publicUrl,
-                        etag: obj.etag
-                    });
-                }
-            });
-            
-            stream.on('end', () => {
-                recordings.sort((a, b) => new Date(b.lastModified) - new Date(a.lastModified));
-                resolve(recordings);
-            });
-            
-            stream.on('error', reject);
-        });
-    } catch (error) {
-        log('ERROR', `Failed to list MinIO recordings: ${error.message}`);
-        return [];
-    }
-};
 
 const checkDependencies = () => {
     const deps = [
@@ -462,12 +415,8 @@ const recordSlideshow = async (slideUrl, timings, outputPath, recordingId) => {
                     recordingStarted = true;
                     log('SUCCESS', 'Screen recording started', recordingId);
                 }
-                // Update recording status
-                if (activeRecordings.has(recordingId)) {
-                    const status = activeRecordings.get(recordingId);
-                    status.lastUpdate = new Date();
-                    status.ffmpegOutput = output.split(' ').pop();
-                }
+                // Log recording progress
+                log('INFO', `Recording progress: ${output.split(' ').pop()}`, recordingId);
             }
         });
 
@@ -518,39 +467,6 @@ const recordSlideshow = async (slideUrl, timings, outputPath, recordingId) => {
 
 // API Routes
 
-// Health check with MinIO status
-app.get('/health', async (req, res) => {
-    const missing = checkDependencies();
-    const systemInfo = {
-        platform: process.platform,
-        nodeVersion: process.version,
-        memory: process.memoryUsage(),
-        uptime: process.uptime(),
-        activeRecordings: activeRecordings.size
-    };
-
-    // Check MinIO connection
-    let minioStatus = 'unknown';
-    try {
-        await minioClient.bucketExists(MINIO_BUCKET);
-        minioStatus = 'connected';
-    } catch (error) {
-        minioStatus = `error: ${error.message}`;
-    }
-
-    res.json({
-        status: missing.length === 0 ? 'healthy' : 'unhealthy',
-        dependencies: missing.length === 0 ? 'all found' : `missing: ${missing.join(', ')}`,
-        minio: {
-            status: minioStatus,
-            endpoint: `${MINIO_CONFIG.useSSL ? 'https' : 'http'}://${MINIO_CONFIG.endPoint}:${MINIO_CONFIG.port}`,
-            bucket: MINIO_BUCKET
-        },
-        system: systemInfo,
-        timestamp: new Date().toISOString()
-    });
-});
-
 // Start recording - Main API endpoint with MinIO upload
 app.post('/record', async (req, res) => {
     // Log the raw request for debugging
@@ -594,191 +510,85 @@ app.post('/record', async (req, res) => {
         });
     }
 
-    // Check if system is busy
-    if (activeRecordings.size > 0) {
-        return res.status(429).json({
-            error: 'System busy. Another recording is in progress. Please wait.',
-            activeRecordings: activeRecordings.size
-        });
-    }
-
     const recordingId = uuidv4();
     const tempOutputPath = path.join(TEMP_DIR, `slideshow_${recordingId}.mp4`);
     const minioObjectName = `slideshow_${recordingId}.mp4`;
     const presentUrl = convertToPresentUrl(slideUrl);
 
-    // Track recording status
-    activeRecordings.set(recordingId, {
-        status: 'starting',
-        slideUrl: presentUrl,
-        timings,
-        startTime: new Date(),
-        lastUpdate: new Date()
-    });
+    // Process recording synchronously and return MinIO URL
+    try {
+        log('INFO', `Starting recording for: ${presentUrl}`, recordingId);
+        log('INFO', `Timings: ${timings.join(', ')}`, recordingId);
 
-    // Send immediate response
-    res.json({
-        success: true,
-        recordingId,
-        status: 'started',
-        message: 'Recording started. Video will be uploaded to MinIO. Use GET /recording/:id to check progress.',
-        estimatedDuration: Math.max(...timings) + 10,
-        timestamp: new Date().toISOString()
-    });
+        // Check dependencies
+        const missing = checkDependencies();
+        if (missing.length > 0) {
+            throw new Error(`Missing dependencies: ${missing.join(', ')}`);
+        }
 
-    // Start recording asynchronously
-    (async () => {
+        // Start virtual display
+        await startXvfb();
+
+        // Record slideshow to temp file
+        await recordSlideshow(presentUrl, timings, tempOutputPath, recordingId);
+
+        // Check if file was created and has content
+        if (!fs.existsSync(tempOutputPath)) {
+            throw new Error('Recording file was not created');
+        }
+
+        const stats = fs.statSync(tempOutputPath);
+        if (stats.size === 0) {
+            throw new Error('Recording file is empty');
+        }
+
+        log('INFO', 'Uploading recording to MinIO...', recordingId);
+
+        // Upload to MinIO
+        const minioUrl = await uploadToMinIO(tempOutputPath, minioObjectName, recordingId);
+
+        log('SUCCESS', `Recording completed and uploaded: ${minioUrl}`, recordingId);
+
+        // Cleanup temp file
         try {
-            log('INFO', `Starting recording for: ${presentUrl}`, recordingId);
-            log('INFO', `Timings: ${timings.join(', ')}`, recordingId);
+            fs.unlinkSync(tempOutputPath);
+            log('INFO', 'Cleaned up temporary file', recordingId);
+        } catch (cleanupError) {
+            log('WARNING', `Failed to cleanup temp file: ${cleanupError.message}`, recordingId);
+        }
 
-            // Update status
-            activeRecordings.get(recordingId).status = 'checking_dependencies';
+        // Send success response with MinIO URL
+        res.json({
+            success: true,
+            recordingId,
+            downloadUrl: minioUrl,
+            fileSize: stats.size,
+            fileSizeMB: Math.round(stats.size / 1024 / 1024 * 100) / 100,
+            message: 'Recording completed and uploaded to MinIO successfully.',
+            timestamp: new Date().toISOString()
+        });
 
-            // Check dependencies
-            const missing = checkDependencies();
-            if (missing.length > 0) {
-                throw new Error(`Missing dependencies: ${missing.join(', ')}`);
-            }
+    } catch (error) {
+        log('ERROR', `Recording failed: ${error.message}`, recordingId);
 
-            // Update status
-            activeRecordings.get(recordingId).status = 'starting_virtual_display';
-
-            // Start virtual display
-            await startXvfb();
-
-            // Update status
-            activeRecordings.get(recordingId).status = 'recording';
-
-            // Record slideshow to temp file
-            await recordSlideshow(presentUrl, timings, tempOutputPath, recordingId);
-
-            // Check if file was created and has content
-            if (!fs.existsSync(tempOutputPath)) {
-                throw new Error('Recording file was not created');
-            }
-
-            const stats = fs.statSync(tempOutputPath);
-            if (stats.size === 0) {
-                throw new Error('Recording file is empty');
-            }
-
-            // Update status
-            activeRecordings.get(recordingId).status = 'uploading_to_minio';
-            log('INFO', 'Uploading recording to MinIO...', recordingId);
-
-            // Upload to MinIO
-            const minioUrl = await uploadToMinIO(tempOutputPath, minioObjectName, recordingId);
-
-            // Update final status
-            activeRecordings.set(recordingId, {
-                ...activeRecordings.get(recordingId),
-                status: 'completed',
-                endTime: new Date(),
-                fileSize: stats.size,
-                fileSizeMB: Math.round(stats.size / 1024 / 1024 * 100) / 100,
-                downloadUrl: minioUrl,
-                minioObjectName: minioObjectName
-            });
-
-            log('SUCCESS', `Recording completed and uploaded: ${minioUrl}`, recordingId);
-
-            // Cleanup temp file
+        // Cleanup temp file
+        if (fs.existsSync(tempOutputPath)) {
             try {
                 fs.unlinkSync(tempOutputPath);
-                log('INFO', 'Cleaned up temporary file', recordingId);
-            } catch (cleanupError) {
-                log('WARNING', `Failed to cleanup temp file: ${cleanupError.message}`, recordingId);
-            }
-
-        } catch (error) {
-            log('ERROR', `Recording failed: ${error.message}`, recordingId);
-
-            // Update error status
-            if (activeRecordings.has(recordingId)) {
-                activeRecordings.set(recordingId, {
-                    ...activeRecordings.get(recordingId),
-                    status: 'failed',
-                    error: error.message,
-                    endTime: new Date()
-                });
-            }
-
-            // Cleanup temp file
-            if (fs.existsSync(tempOutputPath)) {
-                try {
-                    fs.unlinkSync(tempOutputPath);
-                } catch { }
-            }
-        } finally {
-            // Always cleanup virtual display
-            stopXvfb();
-
-            // Remove from active recordings after 5 minutes
-            setTimeout(() => {
-                activeRecordings.delete(recordingId);
-            }, 5 * 60 * 1000);
+            } catch { }
         }
-    })();
-});
 
-// Get recording status/info
-app.get('/recording/:id', (req, res) => {
-    const { id } = req.params;
-
-    // Check if recording is active
-    if (activeRecordings.has(id)) {
-        const recording = activeRecordings.get(id);
-        return res.json({
-            recordingId: id,
-            ...recording,
-            duration: new Date() - recording.startTime
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            recordingId,
+            timestamp: new Date().toISOString()
         });
+    } finally {
+        // Always cleanup virtual display
+        stopXvfb();
     }
 
-    // If not active, return not found (since we don't store locally anymore)
-    res.status(404).json({ 
-        error: 'Recording not found or expired',
-        message: 'Active recordings are only tracked during processing. Use GET /recordings to list completed recordings.'
-    });
-});
-
-// List all recordings from MinIO
-app.get('/recordings', async (req, res) => {
-    try {
-        const minioRecordings = await listMinIORecordings();
-        const activeRecordingsArray = Array.from(activeRecordings.entries()).map(([id, data]) => ({
-            recordingId: id,
-            ...data
-        }));
-
-        res.json({
-            recordings: minioRecordings,
-            active: activeRecordingsArray,
-            count: minioRecordings.length,
-            totalSizeMB: Math.round(minioRecordings.reduce((sum, f) => sum + f.fileSizeMB, 0) * 100) / 100,
-            storage: 'MinIO'
-        });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
-
-// Delete recording from MinIO
-app.delete('/recording/:id', async (req, res) => {
-    const { id } = req.params;
-    const objectName = `slideshow_${id}.mp4`;
-
-    try {
-        const success = await deleteFromMinIO(objectName);
-        if (success) {
-            res.json({ success: true, message: 'Recording deleted from MinIO' });
-        } else {
-            res.status(404).json({ error: 'Recording not found in MinIO' });
-        }
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
 });
 
 // Cleanup on exit
@@ -791,55 +601,7 @@ const cleanup = () => {
 process.on('SIGINT', cleanup);
 process.on('SIGTERM', cleanup);
 
-// Root endpoint with comprehensive API documentation
-app.get('/', (req, res) => {
-    res.json({
-        name: 'Google Slides Recording API with MinIO',
-        version: '2.1.0',
-        description: 'Automated recording of Google Slides presentations with MinIO cloud storage',
-        endpoints: {
-            'GET /': 'API documentation',
-            'GET /health': 'Check API health, dependencies, and MinIO connection',
-            'POST /record': 'Start recording (body: {slideUrl, timings})',
-            'GET /recording/:id': 'Get active recording status',
-            'GET /recordings': 'List all recordings from MinIO',
-            'DELETE /recording/:id': 'Delete recording from MinIO'
-        },
-        usage: {
-            record: {
-                method: 'POST',
-                url: '/record',
-                body: {
-                    slideUrl: 'https://docs.google.com/presentation/d/your-presentation-id/edit',
-                    timings: [5, 8, 12, 20]
-                },
-                description: 'timings array represents seconds when to advance to next slide'
-            },
-            checkStatus: {
-                method: 'GET',
-                url: '/recording/{recordingId}',
-                description: 'Check active recording progress'
-            }
-        },
-        storage: {
-            type: 'MinIO S3-compatible',
-            endpoint: `${MINIO_CONFIG.useSSL ? 'https' : 'http'}://${MINIO_CONFIG.endPoint}:${MINIO_CONFIG.port}`,
-            bucket: MINIO_BUCKET,
-            publicAccess: true
-        },
-        requirements: {
-            system: ['Linux with X11', 'Xvfb', 'Google Chrome/Chromium', 'FFmpeg', 'Node.js'],
-            optional: ['Fluxbox or Openbox window manager for better rendering'],
-            minio: ['MinIO server running', 'Valid access credentials']
-        },
-        environment: {
-            MINIO_ENDPOINT: MINIO_CONFIG.endPoint,
-            MINIO_PORT: MINIO_CONFIG.port,
-            MINIO_USE_SSL: MINIO_CONFIG.useSSL,
-            MINIO_BUCKET: MINIO_BUCKET
-        }
-    });
-});
+
 
 // Initialize MinIO and start server
 (async () => {
