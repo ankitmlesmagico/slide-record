@@ -1,23 +1,52 @@
 {
-  "name": "slides-recorder",
-  "version": "1.0.0",
-  "description": "Automated Google Slides presentation recorder",
-  "main": "server.js",
+  "name": "google-slides-recording-api-minio",
+  "version": "2.1.0",
+  "description": "Production-ready API for automated Google Slides presentation recording with MinIO storage",
+  "main": "slides-recording-api-minio.js",
   "scripts": {
-    "start": "node server.js",
-    "start:api": "node api-server.js",
-    "start:virtual": "node server-virtual.js",
-    "dev": "nodemon server.js",
-    "dev:virtual": "nodemon server-virtual.js"
+    "start": "node slides-recording-api-minio.js",
+    "dev": "nodemon slides-recording-api-minio.js",
+    "test": "node debug-test.js",
+    "install-deps": "sudo apt update && sudo apt install -y xvfb google-chrome-stable ffmpeg nodejs npm fluxbox",
+    "check-deps": "node -e \"console.log('Checking dependencies...'); const deps=['xvfb-run','google-chrome','ffmpeg','node']; deps.forEach(d => { try { require('child_process').execSync('which '+d, {stdio:'ignore'}); console.log('✓ '+d); } catch { console.log('✗ '+d+' (missing)'); } });\""
   },
   "dependencies": {
     "express": "^4.21.2",
-    "minio": "^8.0.5",
-    "multer": "^1.4.5-lts.1",
     "puppeteer": "^21.11.0",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "minio": "^8.0.5"
   },
   "devDependencies": {
-    "nodemon": "^3.0.2"
-  }
+    "nodemon": "^3.0.2",
+    "axios": "^1.6.0"
+  },
+  "keywords": [
+    "google-slides",
+    "presentation",
+    "recording",
+    "automation",
+    "puppeteer",
+    "api",
+    "video",
+    "minio",
+    "s3",
+    "ffmpeg",
+    "xvfb"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "os": [
+    "linux"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/google-slides-recording-api.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/google-slides-recording-api/issues"
+  },
+  "homepage": "https://github.com/yourusername/google-slides-recording-api#readme"
 }
