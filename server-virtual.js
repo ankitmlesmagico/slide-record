@@ -208,3 +208,4 @@ app.listen(PORT, () => {
     console.log(`Virtual Display Server running at http://localhost:${PORT}`);
     console.log('This version uses Xvfb virtual display - no visible windows!');
 });
+
