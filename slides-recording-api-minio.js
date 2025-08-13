@@ -614,8 +614,6 @@ process.on('SIGTERM', cleanup);
 
     app.listen(PORT, () => {
         log('INFO', `Google Slides Recording API with MinIO running on port ${PORT}`);
-        log('INFO', `Health check: http://localhost:${PORT}/health`);
-        log('INFO', `API Documentation: http://localhost:${PORT}/`);
         log('INFO', `MinIO Storage: ${MINIO_CONFIG.useSSL ? 'https' : 'http'}://${MINIO_CONFIG.endPoint}:${MINIO_CONFIG.port}/${MINIO_BUCKET}`);
 
         // Initial dependency check
