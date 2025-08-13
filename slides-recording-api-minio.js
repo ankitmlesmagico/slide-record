@@ -420,7 +420,7 @@ const recordSlideshow = async (slideUrl, timings, outputPath, recordingId) => {
             }
         });
 
-        await new Promise(resolve => setTimeout(resolve, 3000));
+        // await new Promise(resolve => setTimeout(resolve, 10));
 
         // Execute slide transitions with precise timing
         let currentTime = 0;
@@ -442,7 +442,7 @@ const recordSlideshow = async (slideUrl, timings, outputPath, recordingId) => {
         }
 
         log('INFO', 'Recording final slide...', recordingId);
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        // await new Promise(resolve => setTimeout(resolve, 5000));
 
     } finally {
         if (ffmpegProcess && !ffmpegProcess.killed) {
