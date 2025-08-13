@@ -3,3 +3,5 @@ recordings/*.mp4
 *.log
 .env
 .recordings
+.package-lock.json
+.vscode
