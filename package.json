@@ -12,7 +12,8 @@
     "express": "^4.21.2",
     "puppeteer": "^21.11.0",
     "uuid": "^9.0.1",
-    "minio": "^8.0.5"
+    "minio": "^8.0.5",
+    "dotenv": "^16.3.1"
   },
   "keywords": [
     "google-slides",

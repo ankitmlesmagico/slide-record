@@ -5,28 +5,38 @@ const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const Minio = require('minio');
+const {
+    RECORDING_SERVICE_PORT,
+    RECORDING_SERVICE_MINIO_ENDPOINT,
+    RECORDING_SERVICE_MINIO_PORT,
+    RECORDING_SERVICE_MINIO_USE_SSL,
+    RECORDING_SERVICE_MINIO_ACCESS_KEY,
+    RECORDING_SERVICE_MINIO_SECRET_KEY,
+    RECORDING_SERVICE_MINIO_BUCKET
+} = require('./constants');
 
 const app = express();
-const PORT = process.env.PORT || 3003;
 
 // Configuration
+const PORT = RECORDING_SERVICE_PORT;
 const DISPLAY_NUM = ':99';
 const RESOLUTION = '1920x1080';
-const TEMP_DIR = 'temp-recordings'; // Temporary local storage before upload
-
-// MinIO Configuration
-const MINIO_CONFIG = {
-    endPoint: process.env.MINIO_ENDPOINT || 'localhost',
-    port: parseInt(process.env.MINIO_PORT) || 9000,
-    useSSL: process.env.MINIO_USE_SSL === 'true' || false,
-    accessKey: process.env.MINIO_ACCESS_KEY || 'minioadmin',
-    secretKey: process.env.MINIO_SECRET_KEY || 'minioadmin'
-};
-
-const MINIO_BUCKET = process.env.MINIO_BUCKET || 'slide-recordings';
+const TEMP_DIR = 'temp-recordings';
+const MINIO_ENDPOINT = RECORDING_SERVICE_MINIO_ENDPOINT;
+const MINIO_PORT = RECORDING_SERVICE_MINIO_PORT;
+const MINIO_USE_SSL = RECORDING_SERVICE_MINIO_USE_SSL;
+const MINIO_ACCESS_KEY = RECORDING_SERVICE_MINIO_ACCESS_KEY;
+const MINIO_SECRET_KEY = RECORDING_SERVICE_MINIO_SECRET_KEY;
+const MINIO_BUCKET = RECORDING_SERVICE_MINIO_BUCKET;
 
 // Initialize MinIO client
-const minioClient = new Minio.Client(MINIO_CONFIG);
+const minioClient = new Minio.Client({
+    endPoint: MINIO_ENDPOINT,
+    port: MINIO_PORT,
+    useSSL: MINIO_USE_SSL,
+    accessKey: MINIO_ACCESS_KEY,
+    secretKey: MINIO_SECRET_KEY
+});
 
 // Enhanced JSON middleware with error handling
 app.use(express.json({
@@ -79,7 +89,7 @@ const log = (level, message, recordingId = null) => {
 const initializeMinIO = async () => {
     try {
         log('INFO', 'Initializing MinIO connection...');
-        
+
         // Check if bucket exists, create if not
         const bucketExists = await minioClient.bucketExists(MINIO_BUCKET);
         if (!bucketExists) {
@@ -88,7 +98,7 @@ const initializeMinIO = async () => {
         } else {
             log('SUCCESS', `MinIO bucket exists: ${MINIO_BUCKET}`);
         }
-        
+
         // Set bucket policy to allow public read access for recordings
         const policy = {
             Version: '2012-10-17',
@@ -101,10 +111,10 @@ const initializeMinIO = async () => {
                 }
             ]
         };
-        
+
         await minioClient.setBucketPolicy(MINIO_BUCKET, JSON.stringify(policy));
         log('SUCCESS', 'MinIO bucket policy set for public read access');
-        
+
         return true;
     } catch (error) {
         log('ERROR', `MinIO initialization failed: ${error.message}`);
@@ -115,7 +125,7 @@ const initializeMinIO = async () => {
 const uploadToMinIO = async (filePath, objectName, recordingId) => {
     try {
         log('INFO', `Uploading to MinIO: ${objectName}`, recordingId);
-        
+
         const stats = fs.statSync(filePath);
         const metaData = {
             'Content-Type': 'video/mp4',
@@ -123,14 +133,14 @@ const uploadToMinIO = async (filePath, objectName, recordingId) => {
             'X-Recording-ID': recordingId,
             'X-Upload-Time': new Date().toISOString()
         };
-        
+
         await minioClient.fPutObject(MINIO_BUCKET, objectName, filePath, metaData);
-        
+
         // Generate public URL
-        const protocol = MINIO_CONFIG.useSSL ? 'https' : 'http';
-        const port = MINIO_CONFIG.port === (MINIO_CONFIG.useSSL ? 443 : 80) ? '' : `:${MINIO_CONFIG.port}`;
-        const publicUrl = `${protocol}://${MINIO_CONFIG.endPoint}${port}/${MINIO_BUCKET}/${objectName}`;
-        
+        const protocol = MINIO_USE_SSL ? 'https' : 'http';
+        const port = MINIO_PORT === (MINIO_USE_SSL ? 443 : 80) ? '' : `:${MINIO_PORT}`;
+        const publicUrl = `${protocol}://${MINIO_ENDPOINT}${port}/${MINIO_BUCKET}/${objectName}`;
+
         log('SUCCESS', `Uploaded to MinIO: ${publicUrl}`, recordingId);
         return publicUrl;
     } catch (error) {
@@ -337,7 +347,11 @@ const recordSlideshow = async (slideUrl, timings, outputPath, recordingId) => {
         });
 
         const page = await browser.newPage();
-        await page.setViewport({ width: 1920, height: 1080, deviceScaleFactor: 1 });
+        await page.setViewport({
+            width: 1920,
+            height: 1080,
+            deviceScaleFactor: 1
+        });
 
         // Enhanced automation detection removal
         await page.evaluateOnNewDocument(() => {

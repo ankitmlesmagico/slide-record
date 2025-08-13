@@ -1,0 +1,21 @@
+// @ts-nocheck
+require('dotenv').config();
+
+// Environment Variables Only
+const RECORDING_SERVICE_PORT = process.env.PORT || 3003;
+const RECORDING_SERVICE_MINIO_ENDPOINT = process.env.MINIO_ENDPOINT || 'localhost';
+const RECORDING_SERVICE_MINIO_PORT = parseInt(process.env.MINIO_PORT) || 9000;
+const RECORDING_SERVICE_MINIO_USE_SSL = process.env.MINIO_USE_SSL === 'true' || false;
+const RECORDING_SERVICE_MINIO_ACCESS_KEY = process.env.MINIO_ACCESS_KEY || 'minioadmin';
+const RECORDING_SERVICE_MINIO_SECRET_KEY = process.env.MINIO_SECRET_KEY || 'minioadmin';
+const RECORDING_SERVICE_MINIO_BUCKET = process.env.MINIO_BUCKET || 'slide-recordings';
+
+module.exports = {
+    RECORDING_SERVICE_PORT,
+    RECORDING_SERVICE_MINIO_ENDPOINT,
+    RECORDING_SERVICE_MINIO_PORT,
+    RECORDING_SERVICE_MINIO_USE_SSL,
+    RECORDING_SERVICE_MINIO_ACCESS_KEY,
+    RECORDING_SERVICE_MINIO_SECRET_KEY,
+    RECORDING_SERVICE_MINIO_BUCKET
+};
