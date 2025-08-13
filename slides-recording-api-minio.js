@@ -622,13 +622,18 @@ process.on('SIGTERM', cleanup);
     const minioReady = await initializeMinIO();
     if (!minioReady) {
         log('ERROR', 'Failed to initialize MinIO. Please check your MinIO configuration.');
-        log('INFO', 'Current MinIO config:', JSON.stringify(MINIO_CONFIG, null, 2));
+        log('INFO', 'Current MinIO config:', JSON.stringify({
+            endPoint: MINIO_ENDPOINT,
+            port: MINIO_PORT,
+            useSSL: MINIO_USE_SSL,
+            bucket: MINIO_BUCKET
+        }, null, 2));
         process.exit(1);
     }
 
     app.listen(PORT, () => {
         log('INFO', `Google Slides Recording API with MinIO running on port ${PORT}`);
-        log('INFO', `MinIO Storage: ${MINIO_CONFIG.useSSL ? 'https' : 'http'}://${MINIO_CONFIG.endPoint}:${MINIO_CONFIG.port}/${MINIO_BUCKET}`);
+        log('INFO', `MinIO Storage: ${MINIO_USE_SSL ? 'https' : 'http'}://${MINIO_ENDPOINT}:${MINIO_PORT}/${MINIO_BUCKET}`);
 
         // Initial dependency check
         const missing = checkDependencies();
