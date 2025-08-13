@@ -1,0 +1,71 @@
+services:
+  # MinIO Service
+  minio:
+    image: minio/minio:latest
+    container_name: slides-minio
+    ports:
+      - "9002:9000"  # API port
+      - "9003:9001"  # Console port
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - slides-network
+
+  # Slide Recording Service
+  slides-recorder:
+    build: .
+    container_name: slides-recorder
+    ports:
+      - "3003:3003"
+    environment:
+      # Server config
+      PORT: 3003
+      # Docker environment flag
+      DOCKER_ENV: true
+      # MinIO config
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_USE_SSL: false
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
+      MINIO_BUCKET: slide-recordings
+      # Display config
+      DISPLAY: :99
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - slides-network
+    # Add capabilities for Chrome
+    cap_add:
+      - SYS_ADMIN
+    # Security options for Chrome
+    security_opt:
+      - seccomp:unconfined
+    # Shared memory size for Chrome
+    shm_size: 2gb
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3003/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  minio_data:
+    driver: local
+
+networks:
+  slides-network:
+    driver: bridge

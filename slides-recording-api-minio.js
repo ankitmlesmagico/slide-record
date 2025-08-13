@@ -136,10 +136,16 @@ const uploadToMinIO = async (filePath, objectName, recordingId) => {
 
         await minioClient.fPutObject(MINIO_BUCKET, objectName, filePath, metaData);
 
-        // Generate public URL
+        // Generate public URL - use external endpoint for Docker
         const protocol = MINIO_USE_SSL ? 'https' : 'http';
-        const port = MINIO_PORT === (MINIO_USE_SSL ? 443 : 80) ? '' : `:${MINIO_PORT}`;
-        const publicUrl = `${protocol}://${MINIO_ENDPOINT}${port}/${MINIO_BUCKET}/${objectName}`;
+        
+        // Check if running in Docker and use appropriate endpoint
+        const isDocker = process.env.DOCKER_ENV === 'true' || MINIO_ENDPOINT === 'minio';
+        const publicEndpoint = isDocker ? 'localhost' : MINIO_ENDPOINT;
+        const publicPort = isDocker ? '9002' : MINIO_PORT;
+        
+        const port = publicPort === (MINIO_USE_SSL ? '443' : '80') ? '' : `:${publicPort}`;
+        const publicUrl = `${protocol}://${publicEndpoint}${port}/${MINIO_BUCKET}/${objectName}`;
 
         log('SUCCESS', `Uploaded to MinIO: ${publicUrl}`, recordingId);
         return publicUrl;
@@ -480,6 +486,28 @@ const recordSlideshow = async (slideUrl, timings, outputPath, recordingId) => {
 };
 
 // API Routes
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        version: require('./package.json').version
+    });
+});
+
+// Root endpoint
+app.get('/', (req, res) => {
+    res.json({
+        service: 'Google Slides Recording API',
+        version: require('./package.json').version,
+        endpoints: {
+            health: '/health',
+            record: 'POST /record'
+        }
+    });
+});
 
 // Start recording - Main API endpoint with MinIO upload
 app.post('/record', async (req, res) => {
